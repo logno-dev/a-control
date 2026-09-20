@@ -1,0 +1,50 @@
+{
+  "name": "midi-deck",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Your MIDI controller, beyond music.",
+  "engines": { "node": ">=22.16.0" },
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "start": "electron-vite preview",
+    "build": "npm run typecheck && electron-vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:smoke": "node scripts/smoke.mjs",
+    "package": "npm run build && electron-builder",
+    "package:win": "npm run build && electron-builder --win"
+  },
+  "dependencies": {
+    "jzz": "^1.9.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^3.24.2"
+  },
+  "optionalDependencies": { "jazz-midi": "^1.7.9" },
+  "devDependencies": {
+    "@types/node": "^22.13.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^44.4.3",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^3.1.0",
+    "playwright": "^1.56.0",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0",
+    "vitest": "^4.1.11"
+  },
+  "build": {
+    "appId": "dev.midideck.desktop",
+    "productName": "MIDI Deck",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "npmRebuild": false,
+    "directories": { "output": "release" },
+    "files": ["out/**/*", "package.json"],
+    "asarUnpack": ["node_modules/jazz-midi/**/*"],
+    "win": { "target": ["nsis"] },
+    "mac": { "target": ["dmg", "zip"], "category": "public.app-category.music" },
+    "linux": { "target": ["AppImage"], "category": "AudioVideo" }
+  }
+}

@@ -24,7 +24,8 @@ export default defineConfig({
     }],
     build: { rollupOptions: { input: {
       index: resolve('apps/desktop/renderer/index.html'),
-      audio: resolve('apps/desktop/renderer/audio.html')
+      audio: resolve('apps/desktop/renderer/audio.html'),
+      overlay: resolve('apps/desktop/renderer/overlay.html')
     } } }
   }
 });

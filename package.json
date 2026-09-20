@@ -1,19 +1,25 @@
 {
   "name": "midi-deck",
-  "version": "0.1.0",
+  "version": "0.2.5",
   "private": true,
   "description": "Your MIDI controller, beyond music.",
   "engines": { "node": ">=22.16.0" },
   "main": "out/main/index.js",
   "scripts": {
+    "predev": "npm run build:assets && npm run build:native",
     "dev": "electron-vite dev",
     "start": "electron-vite preview",
-    "build": "npm run typecheck && electron-vite build",
+    "build": "npm run build:assets && npm run build:native && npm run typecheck && electron-vite build",
+    "build:assets": "node scripts/build-assets.cjs",
+    "build:native": "node scripts/build-native.cjs",
     "typecheck": "tsc --noEmit",
+    "pretest": "npm run build:native",
     "test": "vitest run",
     "test:smoke": "node scripts/smoke.mjs",
-    "package": "npm run build && electron-builder",
-    "package:win": "npm run build && electron-builder --win"
+    "test:focus": "node scripts/focus-smoke.mjs",
+    "package": "npm run build && node scripts/package.cjs",
+    "package:built": "node scripts/package.cjs",
+    "package:win": "npm run build && node scripts/package.cjs --win"
   },
   "dependencies": {
     "jzz": "^1.9.3",
@@ -23,6 +29,7 @@
   },
   "optionalDependencies": { "jazz-midi": "^1.7.9" },
   "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "@types/node": "^22.13.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
@@ -30,6 +37,7 @@
     "electron": "^44.4.3",
     "electron-builder": "^26.0.12",
     "electron-vite": "^3.1.0",
+    "node-api-headers": "^1.9.0",
     "playwright": "^1.56.0",
     "typescript": "^5.7.3",
     "vite": "^6.1.0",
@@ -41,10 +49,10 @@
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "npmRebuild": false,
     "directories": { "output": "release" },
-    "files": ["out/**/*", "package.json"],
+    "files": ["out/**/*", "!out/native/**", "package.json"],
     "asarUnpack": ["node_modules/jazz-midi/**/*"],
-    "win": { "target": ["nsis"] },
-    "mac": { "target": ["dmg", "zip"], "category": "public.app-category.music" },
-    "linux": { "target": ["AppImage"], "category": "AudioVideo" }
+    "win": { "target": ["nsis"], "icon": "out/assets/icon.ico" },
+    "mac": { "target": ["dmg", "zip"], "icon": "out/assets/icon.icns", "category": "public.app-category.music", "extraResources": [{ "from": "out/native/midi-deck-macos.node", "to": "native/midi-deck-macos.node" }] },
+    "linux": { "target": ["AppImage"], "category": "AudioVideo", "icon": "out/assets/icon.png" }
   }
 }

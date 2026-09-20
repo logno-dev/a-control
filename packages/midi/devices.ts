@@ -5,9 +5,10 @@ import type { MidiEvent } from '../shared/schema';
 export class MidiDevices {
   private engine: any;
   private input: any;
-  private output: any;
+  private ports = new Map<string, any>();
   connected = '';
   outputName = '';
+  feedbackName = '';
   backend = 'Initializing';
   inputs: string[] = [];
   outputs: string[] = [];
@@ -20,9 +21,11 @@ export class MidiDevices {
     this.inputs = info.inputs.map((p: { name: string }) => p.name);
     this.outputs = info.outputs.map((p: { name: string }) => p.name);
     if (this.connected && !this.inputs.includes(this.connected)) this.disconnectInput();
-    if (this.outputName && !this.outputs.includes(this.outputName)) { this.output?.close(); this.output = undefined; this.outputName = ''; }
+    for (const [name, port] of this.ports) if (!this.outputs.includes(name)) { port.close(); this.ports.delete(name); }
+    if (!this.ports.has(this.outputName)) this.outputName = '';
+    if (!this.ports.has(this.feedbackName)) this.feedbackName = '';
   }
-  async connect(input: string, output: string) {
+  async connect(input: string, output: string, feedback = '') {
     if (input !== this.connected) {
       this.disconnectInput();
       if (input && this.inputs.includes(input)) {
@@ -34,13 +37,20 @@ export class MidiDevices {
         });
       }
     }
-    if (output !== this.outputName) {
-      this.output?.close(); this.output = undefined; this.outputName = '';
-      if (output && this.outputs.includes(output)) { this.output = await this.engine.openMidiOut(output); this.outputName = output; }
-    }
+    const wanted = new Set([output, feedback].filter(name => name && this.outputs.includes(name)));
+    for (const [name, port] of this.ports) if (!wanted.has(name)) { port.close(); this.ports.delete(name); }
+    this.outputName = ''; this.feedbackName = '';
+    for (const name of wanted) if (!this.ports.has(name)) this.ports.set(name, await this.engine.openMidiOut(name));
+    this.outputName = this.ports.has(output) ? output : '';
+    this.feedbackName = this.ports.has(feedback) ? feedback : '';
   }
   send(raw: number[]) {
-    try { this.output?.send(raw); } catch (error) { this.error(String(error)); }
+    try { this.ports.get(this.outputName)?.send(raw); } catch (error) { this.error(String(error)); }
+  }
+  feedback(raw: number[]): boolean {
+    const port = this.ports.get(this.feedbackName);
+    if (!port) return false;
+    try { port.send(raw); return true; } catch (error) { this.error(String(error)); return false; }
   }
   panic() {
     for (let channel = 0; channel < 16; channel++) {
@@ -50,5 +60,5 @@ export class MidiDevices {
     }
   }
   private disconnectInput() { this.input?.close(); this.input = undefined; this.connected = ''; }
-  close() { this.panic(); this.disconnectInput(); this.output?.close(); this.engine?.close(); }
+  close() { this.panic(); this.disconnectInput(); for (const port of this.ports.values()) port.close(); this.ports.clear(); this.engine?.close(); }
 }

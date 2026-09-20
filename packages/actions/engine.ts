@@ -12,14 +12,22 @@ export class ActionEngine {
   private fractions = new Map<string, number>();
   private lastLaunch = new Map<string, number>();
   private running = 0;
-  constructor(private platform: PlatformAdapter, private host: ActionHost) {}
+  private lastZoom = new Map<string, number>();
+  constructor(private platform: PlatformAdapter, private host: ActionHost, private now = () => Date.now()) {}
   async execute(mapping: Mapping, delta: number, profile: Profile) {
     const key = `${profile.id}:${mapping.id}`;
-    const amount = (this.fractions.get(key) ?? 0) + delta;
-    const steps = Math.trunc(amount);
-    this.fractions.set(key, amount - steps);
+    const zoom = mapping.action === 'canvas.zoom';
+    const previous = this.fractions.get(key) ?? 0;
+    const amount = (zoom && Math.sign(previous) !== Math.sign(delta) ? 0 : previous) + delta;
+    const steps = Math.trunc(amount + Math.sign(amount) * 1e-9);
+    if (zoom && steps && this.now() - (this.lastZoom.get(key) ?? -Infinity) < 120) {
+      this.fractions.set(key, Math.sign(amount) * Math.min(0.99, Math.abs(amount)));
+      return;
+    }
+    this.fractions.set(key, Math.abs(amount - steps) < 1e-9 ? 0 : amount - steps);
     if (!steps) return;
-    const count = Math.min(20, Math.abs(steps));
+    if (zoom) this.lastZoom.set(key, this.now());
+    const count = zoom ? 1 : Math.min(20, Math.abs(steps));
     const positive = steps > 0;
     const parameter = mapping.parameter.trim();
     switch (mapping.action) {

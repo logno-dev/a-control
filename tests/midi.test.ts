@@ -6,7 +6,7 @@ import type { Control } from '../packages/shared/schema';
 
 const event = (raw: number[], time = 100) => normalize('device', raw, time)!;
 function fixture() {
-  const ports: RouterPorts = { synth: vi.fn(), action: vi.fn(), learned: vi.fn(), passthrough: vi.fn() };
+  const ports: RouterPorts = { synth: vi.fn(), action: vi.fn(), learned: vi.fn(), passthrough: vi.fn(), report: vi.fn() };
   return { ports, router: new MidiRouter(ports), config: defaultConfig() };
 }
 describe('MIDI normalization', () => {
@@ -26,7 +26,8 @@ describe('MIDI normalization', () => {
 });
 describe('encoder modes', () => {
   it.each([
-    ['relative-offset', 65, 1], ['relative-offset', 63, -1], ['relative-offset', 64, 0],
+    ['relative-offset', 65, 1], ['relative-offset', 63, -1], ['relative-offset', 64, 0], ['relative-offset', 0, 0],
+    ['relative-arturia-3', 17, 1], ['relative-arturia-3', 15, -1], ['relative-arturia-3', 0, 0],
     ['relative-twos', 1, 1], ['relative-twos', 127, -1], ['relative-twos', 0, 0],
     ['relative-sign', 1, 1], ['relative-sign', 65, -1], ['relative-sign', 64, 0]
   ] as const)('%s decodes %d as %d', (mode, value, result) => { expect(relativeDelta(value, mode)).toBe(result); });
@@ -56,7 +57,7 @@ describe('routing', () => {
   it('plays keys and triggers controls independently', () => {
     const { router, config, ports } = fixture();
     router.route(event([0x90, 60, 100]), config, '');
-    router.route(event([0xb0, 74, 65]), config, '');
+    router.route(event([0xb0, 112, 65]), config, '');
     expect(ports.synth).toHaveBeenCalledOnce();
     expect(ports.action).toHaveBeenCalledWith(expect.objectContaining({ action: 'system.volume.change' }), 1, expect.objectContaining({ id: 'global' }));
   });
@@ -97,5 +98,56 @@ describe('routing', () => {
     router.route(event([0xb0, 64, 0]), config, '');
     expect(ports.synth).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ type: 'cc', number: 64, value: 0 }));
     expect(router.learning).toBe(true); expect(ports.learned).not.toHaveBeenCalled();
+  });
+  it('routes both touch strips to synth by default and consumes mapped strips', () => {
+    const { router, config, ports } = fixture();
+    router.route(event([0xe0, 0, 80]), config, ''); router.route(event([0xb0, 1, 90]), config, '');
+    expect(ports.synth).toHaveBeenCalledTimes(2);
+    config.profiles[0].mappings.push({ id: 'mod-volume', controlId: 'mod-strip', action: 'system.volume.change', parameter: '', enabled: true });
+    router.route(event([0xb0, 1, 50]), config, ''); router.route(event([0xb0, 1, 55]), config, '');
+    expect(ports.synth).toHaveBeenCalledTimes(2);
+    expect(ports.action).toHaveBeenCalledWith(expect.objectContaining({ action: 'system.volume.change' }), 5, expect.anything());
+  });
+  it('passes Reset All Controllers through Learn for the Shift+Octave panic combination', () => {
+    const { router, config, ports } = fixture(); router.learning = true;
+    router.route(event([0xb0, 121, 0]), config, '');
+    expect(ports.synth).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ type: 'cc', number: 121 }));
+  });
+  it('routes the real MiniLab CC112 on keyboard channel 8 to system volume', () => {
+    const { router, config, ports } = fixture();
+    router.route(event([0xb7, 112, 65]), config, '');
+    router.route(event([0xb7, 112, 0]), config, '');
+    router.route(event([0xb7, 112, 63]), config, '');
+    expect(ports.action).toHaveBeenCalledTimes(2);
+    expect(ports.action).toHaveBeenNthCalledWith(1, expect.objectContaining({ action: 'system.volume.change' }), 1, expect.anything());
+    expect(ports.action).toHaveBeenNthCalledWith(2, expect.objectContaining({ action: 'system.volume.change' }), -1, expect.anything());
+  });
+  it('uses absolute movement for ordinary factory encoders and keeps channel baselines separate', () => {
+    const { router, config, ports } = fixture();
+    config.profiles[0].mappings.push({ id: 'e2-volume', controlId: 'encoder-2', action: 'system.volume.change', parameter: '', enabled: true });
+    router.route(event([0xb7, 74, 30]), config, ''); router.route(event([0xb7, 74, 31]), config, '');
+    router.route(event([0xb2, 74, 90]), config, ''); router.route(event([0xb2, 74, 89]), config, '');
+    expect(ports.action).toHaveBeenCalledTimes(2);
+    expect(ports.action).toHaveBeenLastCalledWith(expect.anything(), -1, expect.anything());
+  });
+  it('maps pitch on channel 8 to the unified Affinity app without undoing zoom on release', () => {
+    const { router, config, ports } = fixture();
+    config.profiles.find(p => p.id === 'affinity')!.mappings.push({ id: 'pitch-zoom', controlId: 'pitch-strip', action: 'canvas.zoom', parameter: '', enabled: true });
+    router.route(event([0xe7, 0, 68]), config, 'Affinity Affinity Store');
+    expect(ports.action).not.toHaveBeenCalled(); // Touch-down establishes the origin.
+    router.route(event([0xe7, 0, 72]), config, 'Affinity Affinity Store');
+    router.route(event([0xe7, 0, 64]), config, 'Affinity Affinity Store');
+    expect(ports.action).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ action: 'canvas.zoom' }), 0.4, expect.objectContaining({ id: 'affinity' }));
+    expect(ports.synth).not.toHaveBeenCalled();
+  });
+  it('keeps explicit channel assignments ahead of wildcard mappings and reports mismatches', () => {
+    const { router, config, ports } = fixture();
+    config.controller.controls.push({ ...config.controller.controls[0], id: 'e8', channel: 8 });
+    config.profiles[0].mappings.push({ id: 'e8-next', controlId: 'e8', action: 'media.next', parameter: '', enabled: true });
+    router.route(event([0xb7, 112, 65]), config, '');
+    expect(ports.action).toHaveBeenLastCalledWith(expect.objectContaining({ action: 'media.next' }), 1, expect.anything());
+    config.controller.controls[0].channel = 1;
+    router.route(event([0xb6, 112, 65]), config, '');
+    expect(ports.report).toHaveBeenLastCalledWith(expect.objectContaining({ stage: 'channel-mismatch', detail: expect.stringContaining('received 7') }));
   });
 });

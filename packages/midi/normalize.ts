@@ -13,6 +13,9 @@ export function normalize(deviceId: string, raw: number[], timestamp = Date.now(
 }
 
 export function relativeDelta(value: number, mode: Control['mode']): number {
+  // MiniLab sends a neutral zero between relative messages (manual §4.8.4).
+  if (value === 0) return 0;
+  if (mode === 'relative-arturia-3') return value - 16;
   if (mode === 'relative-twos') return value < 64 ? value : value - 128;
   if (mode === 'relative-offset') return value - 64;
   if (mode === 'relative-sign') return value < 64 ? value : 64 - value;
@@ -23,13 +26,18 @@ export class EncoderState {
   private previous = new Map<string, { value: number; time: number; pressed: boolean }>();
   clear() { this.previous.clear(); }
   delta(control: Control, event: MidiEvent): number {
-    const key = `${event.deviceId}:${control.id}`;
+    const key = `${event.deviceId}:${event.channel}:${control.id}`;
     const last = this.previous.get(key);
     this.previous.set(key, { value: event.value, time: event.timestamp, pressed: event.type !== 'note-off' && event.value > 0 });
     let delta: number;
     if (control.mode === 'button') return event.type !== 'note-off' && event.value > 0 && !last?.pressed ? 1 : 0;
     if (control.mode === 'absolute') {
-      if (!last) return 0; // First position establishes a baseline; no unexpected jump.
+      const spring = event.type === 'pitch-bend' && control.ignoreReturn !== false;
+      const touch = event.type === 'pitch-bend' || control.surface === 'mod-strip' || control.surface === 'pitch-strip';
+      if (spring && Math.abs(event.value - 8192) <= 1) { this.previous.delete(key); return 0; }
+      // Touch-down establishes a relative origin. A new contact after an idle gap
+      // must not jump from the previous finger position or the pitch center.
+      if (!last || touch && event.timestamp - last.time > 300) return 0;
       delta = (event.value - last.value) / (event.type === 'pitch-bend' ? 128 : 1);
     } else delta = relativeDelta(event.value, control.mode);
     const acceleration = control.acceleration && last && event.timestamp - last.time < 40 ? 2 : 1;

@@ -18,6 +18,7 @@ function Key([int]$code, [bool]$up) {
   if ($up) { $flags = $flags -bor 2 }
   [DeckNative]::keybd_event([byte]$code, 0, $flags, [UIntPtr]::Zero)
 }
+[Console]::WriteLine('{"ready":true}')
 while ($null -ne ($line = [Console]::ReadLine())) {
   $req = $null
   try {

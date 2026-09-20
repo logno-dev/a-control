@@ -2,6 +2,8 @@
 
 `.github/workflows/release.yml` creates installers on GitHub-hosted runners:
 
+`npm run build:assets` renders the project-root `icon.svg` using resvg, including embedded images, and creates app/tray PNGs plus Windows ICO and macOS ICNS files. Production and development builds run it automatically. The original SVG is not modified. The release pipeline uses these generated icons on both operating systems.
+
 | Build | Output |
 |---|---|
 | Windows x64 | NSIS `.exe` installer |
@@ -9,6 +11,10 @@
 | macOS Intel | x64 `.dmg` and `.zip` |
 
 The Intel macOS build is cross-packaged on the macOS runner. jazz-midi ships native binaries for both macOS architectures; electron-builder unpacks them from ASAR. Native rebuild is disabled because these are prebuilt Node-API binaries.
+
+The macOS action module is compiled separately by `npm run build:native` (automatically before tests, development, and production builds). It is a universal arm64/x86_64 Node-API library built with the runner's Xcode SDK and `node-api-headers`, included as `Contents/Resources/native/midi-deck-macos.node`. It runs in Electron's main process so the app's Accessibility grant applies directly to the caller. Both macOS installers contain the module without requiring developer tools on end-user machines. A CLI diagnostic helper is built for tests but not packaged. This does not affect the Windows PowerShell backend.
+
+Local development requires Xcode Command Line Tools. `SDKROOT` can select an installed SDK explicitly. If a beta SDK uses architectures the installed linker cannot read, the build retries another installed SDK for that specific error and reports which one was used.
 
 ## Continuous builds
 
@@ -33,7 +39,7 @@ Only the release job has `contents: write`; builds use read-only repository perm
 
 ## Optional signing
 
-No secrets are required for unsigned installers. Set these repository **Actions secrets** for signed distribution:
+No secrets are required for local builds. The packaging wrapper (`npm run package:built`) gives macOS bundles an **ad-hoc signature** when no signing certificate is configured, binding the app's own `dev.midideck.desktop` identity and Info.plist instead of leaving Electron's generic linker signature. Windows builds remain unsigned without credentials. Set these repository **Actions secrets** for trusted distribution:
 
 ### macOS
 
@@ -43,7 +49,7 @@ No secrets are required for unsigned installers. Set these repository **Actions 
 - `APPLE_APP_SPECIFIC_PASSWORD`: app-specific password for notarization.
 - `APPLE_TEAM_ID`: Apple developer team identifier.
 
-electron-builder imports the supplied certificate and uses its standard notarization integration when the Apple credentials are present. Without them, the build is unsigned and unnotarized and macOS may require explicit approval to launch it.
+electron-builder imports the supplied certificate and uses its standard notarization integration when the Apple credentials are present. Without them, the packaging wrapper selects `mac.identity=-`; the build is ad-hoc signed and unnotarized. This is not a substitute for Developer ID/notarization, and macOS may require reauthorization after ad-hoc updates. `CSC_NAME` or an explicit `mac.identity` argument can select a local Developer ID identity. The normal Electron JIT/native-library entitlements are included by electron-builder.
 
 ### Windows
 
@@ -52,7 +58,7 @@ electron-builder imports the supplied certificate and uses its standard notariza
 
 If your certificate provider requires a hardware token or cloud signing service, adapt the signing step to that provider rather than exporting a certificate. Unsigned installers may display a SmartScreen warning.
 
-Signing secrets are unavailable to pull requests from forks; those builds still produce unsigned artifacts. Local certificate autodiscovery is disabled in CI so signing behavior is explicit.
+Signing secrets are unavailable to pull requests from forks; those builds still produce ad-hoc macOS artifacts and unsigned Windows artifacts. Local certificate autodiscovery is disabled in CI so signing behavior is explicit. CI calls the same packaging wrapper as local builds.
 
 ## Local packaging
 

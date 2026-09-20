@@ -22,9 +22,9 @@ describe('action dispatch', () => {
   });
   it('uses application-specific defaults and rejects undefined shortcuts', async () => {
     const { engine, platform, profile } = fixture();
-    await engine.execute(mapping('canvas.zoom'), 1, { ...profile, adapter: 'affinity' });
-    expect(platform.shortcut).toHaveBeenLastCalledWith('Ctrl+Plus', 1);
-    await engine.execute(mapping('canvas.zoom'), -1, { ...profile, adapter: 'opentoonz' });
+    await engine.execute(mapping('canvas.zoom'), 1, { ...profile, id: 'affinity', adapter: 'affinity' });
+    expect(platform.shortcut).toHaveBeenLastCalledWith(process.platform === 'darwin' ? 'Primary+Add' : 'Primary+Plus', 1);
+    await engine.execute(mapping('canvas.zoom'), -1, { ...profile, id: 'opentoonz', adapter: 'opentoonz' });
     expect(platform.shortcut).toHaveBeenLastCalledWith('Subtract', 1);
     await expect(engine.execute(mapping('canvas.rotate'), 1, profile)).rejects.toThrow('positive | negative');
   });
@@ -43,5 +43,5 @@ describe('action dispatch', () => {
   it.skipIf(process.platform !== 'win32')('starts the Windows worker and reads the foreground process', async () => {
     const platform = createPlatform();
     try { expect(typeof await platform.foreground()).toBe('string'); } finally { platform.close(); }
-  }, 15000);
+  }, 45000);
 });

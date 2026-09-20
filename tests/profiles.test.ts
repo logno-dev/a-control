@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defaultConfig } from '../packages/config/defaults';
 import { configSchema } from '../packages/shared/schema';
 import { ConfigStore } from '../packages/config/storage';
 import { applicationProfile, resolveMapping } from '../packages/profiles/resolver';
+import { legacyEncoderCCs } from '../packages/controllers/minilab';
 
 const temporary: string[] = [];
 afterEach(async () => { for (const directory of temporary.splice(0)) await rm(directory, { recursive: true, force: true }); });
@@ -57,5 +58,20 @@ describe('configuration validation and persistence', () => {
     await writeFile(store.path, '{ invalid config');
     await expect(store.load()).rejects.toThrow('Cannot load');
     expect(await readFile(store.path, 'utf8')).toBe('{ invalid config');
+  });
+  it('backs up and persists migrated settings during startup, without needing a UI save', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'midi-deck-migration-')); temporary.push(directory);
+    const store = new ConfigStore(directory);
+    const old = defaultConfig(); old.controller.revision = 1;
+    old.controller.controls.slice(0, 16).forEach((c, index) => Object.assign(c, { number: legacyEncoderCCs[index], channel: 1, mode: 'relative-offset' }));
+    await writeFile(store.path, JSON.stringify(old));
+    const upgraded = await store.load();
+    expect(upgraded.controller.controls[0]).toMatchObject({ number: 112, channel: 0 });
+    expect(JSON.parse(await readFile(store.path, 'utf8'))).toEqual(upgraded);
+    const backups = (await readdir(directory)).filter(file => file.startsWith('settings.backup-'));
+    expect(backups).toHaveLength(1);
+    expect(JSON.parse(await readFile(join(directory, backups[0]), 'utf8'))).toEqual(old);
+    await store.load();
+    expect((await readdir(directory)).filter(file => file.startsWith('settings.backup-'))).toHaveLength(1);
   });
 });

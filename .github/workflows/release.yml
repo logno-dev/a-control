@@ -41,12 +41,14 @@ jobs:
             certificate: MAC_CSC_LINK
             certificate_password: MAC_CSC_KEY_PASSWORD
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
+          cache-dependency-path: package-lock.json
       - name: Install dependencies
         run: npm ci
       - name: Verify release tag matches package version
@@ -57,7 +59,7 @@ jobs:
       - name: Typecheck and build
         run: npm run build
       - name: Package installers
-        run: npx electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --publish never
+        run: npm run package:built -- --${{ matrix.platform }} --${{ matrix.arch }} --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
           CSC_LINK: ${{ secrets[matrix.certificate] }}
@@ -99,7 +101,11 @@ jobs:
         run: |
           node scripts/checksums.cjs release-assets
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes --title "MIDI Deck $RELEASE_TAG"
+            notes=()
+            if [[ -f "docs/releases/$RELEASE_TAG.md" ]]; then
+              notes=(--notes-file "docs/releases/$RELEASE_TAG.md")
+            fi
+            gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes --title "MIDI Deck $RELEASE_TAG" "${notes[@]}"
           fi
           gh release upload "$RELEASE_TAG" release-assets/* --clobber
           if [[ "$RELEASE_TAG" == *-* ]]; then

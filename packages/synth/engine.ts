@@ -5,7 +5,7 @@ export interface SynthBackend {
   event(event: MidiEvent): void;
   panic(): void;
 }
-interface Voice { channel: number; note: number; oscillators: OscillatorNode[]; envelope: GainNode; released: boolean; started: number }
+interface Voice { channel: number; note: number; oscillators: OscillatorNode[]; vibrato: OscillatorNode; depth: GainNode; envelope: GainNode; released: boolean; started: number }
 // A self-contained fallback instrument. Replace this backend for sampled SoundFont/native audio.
 export class WebAudioSynth implements SynthBackend {
   private context = new AudioContext({ latencyHint: 'interactive' });
@@ -14,6 +14,7 @@ export class WebAudioSynth implements SynthBackend {
   private voices = new Map<string, Voice>();
   private sustain = new Set<number>();
   private bend = new Map<number, number>();
+  private modulation = new Map<number, number>();
   private settings: Config['settings']['synth'] = { enabled: true, instrument: 'piano', volume: 0.5 };
   constructor() {
     this.master.connect(this.compressor); this.compressor.connect(this.context.destination);
@@ -43,6 +44,19 @@ export class WebAudioSynth implements SynthBackend {
     if (event.type === 'cc' && [120, 123].includes(event.number)) {
       for (const [id, voice] of this.voices) if (voice.channel === event.channel) this.release(id, true);
     }
+    if (event.type === 'cc' && event.number === 1) {
+      const amount = event.value / 127 * 45;
+      this.modulation.set(event.channel, amount);
+      for (const voice of this.voices.values()) if (voice.channel === event.channel) voice.depth.gain.setTargetAtTime(amount, this.context.currentTime, 0.02);
+    }
+    if (event.type === 'cc' && event.number === 121) {
+      this.sustain.delete(event.channel); this.modulation.delete(event.channel); this.bend.delete(event.channel);
+      for (const [id, voice] of this.voices) if (voice.channel === event.channel) {
+        voice.depth.gain.setTargetAtTime(0, this.context.currentTime, 0.01);
+        for (const oscillator of voice.oscillators) oscillator.detune.setTargetAtTime(0, this.context.currentTime, 0.01);
+        if (voice.released) this.release(id);
+      }
+    }
     if (event.type === 'pitch-bend') {
       const cents = (event.value - 8192) / 8192 * 200;
       this.bend.set(event.channel, cents);
@@ -57,12 +71,17 @@ export class WebAudioSynth implements SynthBackend {
     const instrument = this.settings.instrument;
     const partials = instrument === 'piano' ? [[1, 1], [2, 0.35], [3, 0.12], [4, 0.05]] : instrument === 'electric' ? [[1, 1], [3, 0.25], [7, 0.04]] : instrument === 'organ' ? [[1, 0.65], [2, 0.35], [4, 0.2]] : [[1, 0.7]];
     const frequency = 440 * 2 ** ((event.number - 69) / 12);
+    const vibrato = this.context.createOscillator(); vibrato.frequency.value = 5.5;
+    const depth = this.context.createGain(); depth.gain.value = this.modulation.get(event.channel) ?? 0;
+    vibrato.connect(depth); vibrato.start();
+    vibrato.onended = () => { vibrato.disconnect(); depth.disconnect(); };
     const oscillators = partials.map(([multiple, level]) => {
       const oscillator = this.context.createOscillator();
       const gain = this.context.createGain(); gain.gain.value = level;
       oscillator.type = instrument === 'synth' ? 'triangle' : instrument === 'strings' ? 'sawtooth' : 'sine';
       oscillator.frequency.value = Math.min(20000, frequency * multiple);
       oscillator.detune.value = this.bend.get(event.channel) ?? 0;
+      depth.connect(oscillator.detune);
       oscillator.connect(gain); gain.connect(envelope); oscillator.start();
       oscillator.onended = () => { oscillator.disconnect(); gain.disconnect(); };
       return oscillator;
@@ -73,7 +92,7 @@ export class WebAudioSynth implements SynthBackend {
     if (instrument === 'piano' || instrument === 'electric') {
       envelope.gain.exponentialRampToValueAtTime(Math.max(amplitude * 0.001, 0.00001), now + 6);
     }
-    this.voices.set(key, { channel: event.channel, note: event.number, oscillators, envelope, released: false, started: now });
+    this.voices.set(key, { channel: event.channel, note: event.number, oscillators, vibrato, depth, envelope, released: false, started: now });
   }
   private release(key: string, immediate = false) {
     const voice = this.voices.get(key);
@@ -84,7 +103,8 @@ export class WebAudioSynth implements SynthBackend {
     voice.envelope.gain.cancelAndHoldAtTime(now);
     voice.envelope.gain.linearRampToValueAtTime(0, now + release);
     for (const oscillator of voice.oscillators) oscillator.stop(now + release + 0.01);
+    voice.vibrato.stop(now + release + 0.01);
     setTimeout(() => voice.envelope.disconnect(), (release + 0.1) * 1000);
   }
-  panic() { for (const key of this.voices.keys()) this.release(key, true); this.sustain.clear(); this.bend.clear(); }
+  panic() { for (const key of this.voices.keys()) this.release(key, true); this.sustain.clear(); this.bend.clear(); this.modulation.clear(); }
 }

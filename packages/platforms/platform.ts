@@ -1,21 +1,25 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { windowsHelper } from './windows/helper';
+import { MacOSAdapter } from './macos';
 
 export interface PlatformAdapter {
   foreground(): Promise<string>;
   shortcut(shortcut: string, count?: number): Promise<void>;
   media(key: 'playPause' | 'next' | 'previous' | 'mute' | 'volumeUp' | 'volumeDown', count?: number): Promise<void>;
   scroll(x: number, y: number): Promise<void>;
+  status?(): Promise<{ accessibility: boolean; accessibilityTrusted?: boolean; inputPosting?: boolean; processId?: number; processPath?: string; bundleIdentifier?: string; backend?: string; muted: boolean | null; volume?: number | null; volumeWritable?: boolean; outputName?: string }>;
+  requestAccessibility?(): Promise<void>;
+  testInput?(): Promise<void>;
   close(): void;
 }
 const keys: Record<string, number> = {
-  ctrl: 17, control: 17, alt: 18, shift: 16, win: 91, meta: 91,
+  ctrl: 17, control: 17, primary: 17, alt: 18, shift: 16, win: 91, meta: 91,
   enter: 13, return: 13, tab: 9, space: 32, escape: 27, esc: 27, backspace: 8,
   delete: 46, insert: 45, home: 36, end: 35, pageup: 33, pagedown: 34,
-  left: 37, up: 38, right: 39, down: 40, plus: 187, minus: 189,
+  left: 37, up: 38, right: 39, down: 40, plus: 187, equals: 187, '=': 187, minus: 189,
   add: 107, subtract: 109,
-  '[': 219, ']': 221, ',': 188, '.': 190, '/': 191
+  '[': 219, ']': 221, ',': 188, '.': 190, '/': 191, ';': 186, "'": 222, '\\': 220, '`': 192
 };
 export function parseShortcut(shortcut: string): number[] {
   const parts = shortcut.toLowerCase().split('+').map(s => s.trim());
@@ -28,36 +32,49 @@ export function parseShortcut(shortcut: string): number[] {
   });
 }
 
-class WindowsAdapter implements PlatformAdapter {
+export class WindowsAdapter implements PlatformAdapter {
   private worker?: ChildProcessWithoutNullStreams;
+  private ready?: Promise<void>;
+  private waiting = 0;
   private sequence = 0;
   private pending = new Map<number, { resolve: (value: string) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
-  private start() {
-    if (this.worker) return;
+  private start(): Promise<void> {
+    if (this.worker && this.ready) return this.ready;
     const worker = spawn('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(windowsHelper, 'utf16le').toString('base64')], { windowsHide: true });
     this.worker = worker;
+    let resolveReady!: () => void;
+    let rejectReady!: (error: Error) => void;
+    const ready = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
+    this.ready = ready;
+    const startupTimer = setTimeout(() => { fail(new Error('Windows input worker did not initialize within 30 seconds')); worker.kill(); }, 30000);
     let stderr = '';
     worker.stderr.on('data', chunk => { stderr = (stderr + String(chunk)).slice(-2000); });
     const fail = (error: Error) => {
-      if (this.worker === worker) this.worker = undefined;
+      clearTimeout(startupTimer); rejectReady(error);
+      if (this.worker !== worker) return;
+      this.worker = undefined; this.ready = undefined;
       for (const request of this.pending.values()) { clearTimeout(request.timer); request.reject(error); }
       this.pending.clear();
     };
     worker.on('error', fail);
     worker.on('exit', () => fail(new Error(stderr || 'Windows input worker stopped')));
+    worker.stdin.on('error', fail);
     createInterface({ input: worker.stdout }).on('line', line => {
       try {
         const response = JSON.parse(line);
+        if (response.ready === true) { clearTimeout(startupTimer); resolveReady(); return; }
         const request = this.pending.get(response.id);
         if (!request) return;
         clearTimeout(request.timer); this.pending.delete(response.id);
         if (response.error) request.reject(new Error(response.error)); else request.resolve(response.result);
       } catch { /* Ignore PowerShell startup output. */ }
     });
+    return ready;
   }
-  private call(method: string, args: Record<string, unknown> = {}): Promise<string> {
-    this.start();
-    if (this.pending.size > 32) return Promise.reject(new Error('Windows action queue is full'));
+  private async call(method: string, args: Record<string, unknown> = {}): Promise<string> {
+    if (this.pending.size + this.waiting >= 32) throw new Error('Windows action queue is full');
+    this.waiting++;
+    try { await this.start(); } finally { this.waiting--; }
     const id = ++this.sequence;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('Windows action timed out')); }, 8000);
@@ -82,4 +99,8 @@ class UnsupportedAdapter implements PlatformAdapter {
   async scroll(): Promise<void> { throw new Error('Scroll injection currently requires Windows'); }
   close() {}
 }
-export function createPlatform(): PlatformAdapter { return process.platform === 'win32' ? new WindowsAdapter() : new UnsupportedAdapter(); }
+export function createPlatform(macHelperPath = ''): PlatformAdapter {
+  if (process.platform === 'win32') return new WindowsAdapter();
+  if (process.platform === 'darwin') return new MacOSAdapter(macHelperPath);
+  return new UnsupportedAdapter();
+}
